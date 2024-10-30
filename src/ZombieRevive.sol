@@ -1,42 +1,40 @@
-`// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.18;
 
 import {AggregatorV3Interface} from "lib/chainlink-brownie-contracts/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol"; 
-import {PriceConverter} from "./PriceConverter.sol";
+import {IERC20} from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 
 error ZombieRevive__NotOwner();
 
 contract ZombieRevive {
-    using PriceConverter for uint256;
-
     mapping(address => uint256) private s_playerToRevivesOwned;
     address[] private s_players;
 
     address private immutable i_owner;
-    uint256 public constant REVIVE_PRICE_USD = 1 * 10 ** 18;
-
-    AggregatorV3Interface private s_priceFeed;
+    IERC20 private immutable i_usdc;
+    uint256 public s_revivePriceUsd;
 
     event RevivePurchased(address indexed player, uint256 amount);
     event ReviveUsed(address indexed player);
 
-    constructor(address priceFeedAddress) {
+    constructor(address usdcAddress, uint256 initialRevivePrice) {
         i_owner = msg.sender;
-        s_priceFeed = AggregatorV3Interface(priceFeedAddress);
+        i_usdc = IERC20(usdcAddress);
+        s_revivePriceUsd = initialRevivePrice;
     }
 
-    function buyRevives() public payable {
-        uint256 convertedAmount = msg.value.getConversionRate(s_priceFeed);
-        require(convertedAmount >= REVIVE_PRICE_USD, "Not enough ETH for a revive!");
+    function buyRevives(uint256 amount) public {
+        uint256 totalCost = amount * s_revivePriceUsd;
+        require(i_usdc.balanceOf(msg.sender) >= totalCost, "Not enough USDC!");
+        require(i_usdc.transferFrom(msg.sender, address(this), totalCost), "USDC transfer failed!");
         
-        uint256 reviveAmount = convertedAmount / REVIVE_PRICE_USD;
-        s_playerToRevivesOwned[msg.sender] += reviveAmount;
+        s_playerToRevivesOwned[msg.sender] += amount;
         
-        if (s_playerToRevivesOwned[msg.sender] == reviveAmount) {
+        if (s_playerToRevivesOwned[msg.sender] == amount) {
             s_players.push(msg.sender);
         }
         
-        emit RevivePurchased(msg.sender, reviveAmount);
+        emit RevivePurchased(msg.sender, amount);
     }
 
     function useRevive() external {
@@ -55,16 +53,12 @@ contract ZombieRevive {
     }
 
     function withdraw() public onlyOwner {
-        (bool callSuccess,) = payable(msg.sender).call{value: address(this).balance}("");
-        require(callSuccess, "Call failed");
+        uint256 balance = i_usdc.balanceOf(address(this));
+        require(i_usdc.transfer(msg.sender, balance), "USDC transfer failed");
     }
 
-    fallback() external payable {
-        buyRevives();
-    }
-
-    receive() external payable {
-        buyRevives();
+    function setRevivePrice(uint256 newPrice) external onlyOwner {
+        s_revivePriceUsd = newPrice;
     }
 
     function getPlayerRevives(address player) external view returns (uint256) {
@@ -77,6 +71,10 @@ contract ZombieRevive {
 
     function getOwner() external view returns (address) {
         return i_owner;
+    }
+
+    function getUsdcAddress() external view returns (address) {
+        return address(i_usdc);
     }
 }
 
